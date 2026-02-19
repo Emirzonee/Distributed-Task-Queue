@@ -1,36 +1,62 @@
+import logging
 import time
+
 from broker import RedisBroker
 from models import setup_logger
 
-class MasterOrchestrator:
-    def __init__(self):
-        self.broker = RedisBroker()
-        self.logger = setup_logger("MASTER")
+POLL_INTERVAL = 3  # seconds between health check cycles
 
-    def monitor_workers(self) -> None:
-        self.logger.info("Orkestratör devrede. Sağlık kontrolü (Heartbeat) izleniyor...")
-        
+
+class MasterOrchestrator:
+    """
+    Monitors worker health and recovers tasks from crashed workers.
+
+    On each cycle the orchestrator:
+      1. Finds all workers that currently hold at least one task.
+      2. Checks whether each worker's heartbeat key is still alive.
+      3. For any worker whose key has expired, calls requeue_orphaned_tasks()
+         to move their in-flight tasks back to the shared pending queue.
+
+    The orchestrator does not assign tasks — it only acts as a watchdog.
+    """
+
+    def __init__(self) -> None:
+        self.broker = RedisBroker()
+        self.logger: logging.Logger = setup_logger("MASTER")
+
+    def run(self) -> None:
+        """Starts the monitoring loop. Blocks until interrupted."""
+        self.logger.info("Master orchestrator started. Monitoring worker heartbeats.")
+
         while True:
-            # O an üzerinde iş olan (processing) tüm Worker'ları bul
-            active_workers = self.broker.get_all_processing_workers()
-            
-            for w_id in active_workers:
-                # Eğer Worker'ın kalp atışı sönmüşse (TTL dolmuşsa)
-                if not self.broker.is_worker_alive(w_id):
-                    self.logger.warning(f"⚠️ [KAYIP] Worker-{w_id} yanıt vermiyor!")
-                    self.logger.info(f"Worker-{w_id} için Redelivery (Geri Kazanım) başlatılıyor...")
-                    
-                    # Çöken işçinin elindeki görevleri ana kuyruğa geri taşı
-                    recovered_count = self.broker.requeue_orphaned_tasks(w_id)
-                    
-                    self.logger.info(f"✅ Toplam {recovered_count} görev başarıyla kurtarıldı ve sıraya eklendi.")
-            
-            # Her 3 saniyede bir tarama yap
-            time.sleep(3)
+            self._check_workers()
+            time.sleep(POLL_INTERVAL)
+
+    def _check_workers(self) -> None:
+        """Single health-check cycle across all active workers."""
+        active_workers = self.broker.get_all_processing_workers()
+
+        for worker_id in active_workers:
+            if not self.broker.is_worker_alive(worker_id):
+                self.logger.warning(
+                    "Worker is unresponsive, starting recovery.",
+                    extra={"worker_id": worker_id},
+                )
+                recovered = self.broker.requeue_orphaned_tasks(worker_id)
+                self.logger.info(
+                    "Recovery complete.",
+                    extra={"worker_id": worker_id, "tasks_recovered": recovered},
+                )
+
+
+# ----------------------------------------------------------------------
+# Entry point
+# ----------------------------------------------------------------------
 
 if __name__ == "__main__":
     master = MasterOrchestrator()
+
     try:
-        master.monitor_workers()
+        master.run()
     except KeyboardInterrupt:
-        master.logger.info("Orkestratör durduruldu.")
+        master.logger.info("Master orchestrator stopped.")

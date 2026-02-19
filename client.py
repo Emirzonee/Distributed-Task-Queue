@@ -1,24 +1,65 @@
 import time
+import argparse
+import logging
+
 from broker import RedisBroker
 from models import Task, setup_logger
 
-def generate_tasks(count: int = 5):
+DEFAULT_TASK_COUNT = 5
+SEND_INTERVAL = 0.5  # seconds between task submissions
+
+
+def build_payload(index: int) -> dict:
+    """
+    Constructs a sample task payload.
+
+    Replace this function with whatever data your workers actually need.
+
+    Args:
+        index: Sequential task number used to differentiate payloads.
+
+    Returns:
+        Dict representing the task's input data.
+    """
+    return {
+        "operation": "data_analysis",
+        "data_id": 100 + index,
+        "priority": "high",
+    }
+
+
+def send_tasks(count: int = DEFAULT_TASK_COUNT) -> None:
+    """
+    Sends `count` tasks to the pending queue.
+
+    Args:
+        count: Number of tasks to enqueue.
+    """
     broker = RedisBroker()
-    logger = setup_logger("CLIENT")
-    
-    logger.info(f"Sisteme {count} adet yeni görev gönderiliyor...")
-    
+    logger: logging.Logger = setup_logger("CLIENT")
+
+    logger.info(f"Sending {count} tasks to the queue.")
+
     for i in range(count):
-        # Görev içeriği (payload) - Gerçek hayatta bu bir video işleme veya mail atma isteği olabilir
-        payload = {"islem_tipi": "veri_analizi", "veri_id": 100 + i, "zorluk": "yuksek"}
-        
-        # Yeni task nesnesi oluştur ve kuyruğa at
-        new_task = Task(payload=payload)
-        broker.push_task(new_task)
-        
-        time.sleep(0.5) # Görevleri yarım saniye arayla gönder
-        
-    logger.info("Tüm görevler başarıyla kuyruğa iletildi!")
+        task = Task(payload=build_payload(i))
+        broker.push_task(task)
+        time.sleep(SEND_INTERVAL)
+
+    logger.info("All tasks submitted successfully.")
+
+
+# ----------------------------------------------------------------------
+# Entry point
+# ----------------------------------------------------------------------
 
 if __name__ == "__main__":
-    generate_tasks(5)
+    parser = argparse.ArgumentParser(description="Submit tasks to the distributed queue.")
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=DEFAULT_TASK_COUNT,
+        help=f"Number of tasks to send (default: {DEFAULT_TASK_COUNT})",
+    )
+    args = parser.parse_args()
+
+    send_tasks(args.count)
