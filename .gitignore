@@ -1,0 +1,7 @@
+# Güvenlik
+.env
+
+# Sanal Ortam ve Python Artıkları
+.venv/
+__pycache__/
+*.pyc
